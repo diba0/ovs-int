@@ -376,6 +376,10 @@ enum ofp_raw_action_type {
 
     /* NX1.0+(255): void. */
     NXAST_RAW_DEBUG_RECIRC,
+
+    /* OF1.0(99): struct ofp_action_int_transmit. */
+    OFPAT_RAW_INT_TRANSMIT,
+
 };
 
 /* OpenFlow actions are always a multiple of 8 bytes in length. */
@@ -504,6 +508,7 @@ ofpact_next_flattened(const struct ofpact *ofpact)
     case OFPACT_DEC_NSH_TTL:
     case OFPACT_CHECK_PKT_LARGER:
     case OFPACT_DELETE_FIELD:
+    case OFPACT_INT_TRANSMIT:
         return ofpact_next(ofpact);
 
     case OFPACT_CLONE:
@@ -714,7 +719,77 @@ check_OUTPUT(const struct ofpact_output *a,
 {
     return ofpact_check_output_port(a->port, cp->max_ports);
 }
-
+
+/* INT */
+struct ofp_action_int_transmit {
+    ovs_be16 type;                  /* OFPAT10_OUTPUT. */
+    ovs_be16 len;                   /* Length is 8. */
+    ovs_be16 port;                  /* Output port. */
+    ovs_be16 device_id;             /* device id. */
+};
+OFP_ASSERT(sizeof(struct ofp_action_int_transmit) == 8);
+
+             
+static enum ofperr
+decode_OFPAT_RAW_INT_TRANSMIT(const struct ofp_action_int_transmit *oao,
+                          enum ofp_version ofp_version OVS_UNUSED,
+                          struct ofpbuf *out)
+{
+    struct ofpact_int_transmit *output;
+
+    output = ofpact_put_INT_TRANSMIT(out);
+    output->port = u16_to_ofp(ntohs(oao->port));
+    output->device_id = ntohs(oao->device_id);
+
+    return ofpact_check_output_port(output->port, OFPP_MAX);
+}
+
+                          
+static void
+encode_INT_TRANSMIT(const struct ofpact_int_transmit *output,
+              enum ofp_version ofp_version, struct ofpbuf *out)
+{
+    if (ofp_version == OFP10_VERSION) {
+        struct ofp_action_int_transmit *oao;
+
+        oao = put_OFPAT_INT_TRANSMIT(out);
+        oao->port = htons(ofp_to_u16(output->port));
+        oao->device_id = htons(output->device_id);
+    }
+}
+
+static char * OVS_WARN_UNUSED_RESULT
+parse_INT_TRANSMIT(const char *arg, const struct ofpact_parse_params *pp)
+{
+    ofp_port_t port;
+    if (ofputil_port_from_string(arg, pp->port_map, &port)) {
+        struct ofpact_int_transmit *output = ofpact_put_INT_TRANSMIT(pp->ofpacts);
+        output->port = port;
+        output->device_id = 1;
+        return NULL;
+    }
+    
+    return xasprintf("%s: parse_INT_TRANSMIT error", arg);
+}
+
+static void
+format_INT_TRANSMIT(const struct ofpact_int_transmit *a,
+              const struct ofpact_format_params *fp)
+{
+    if (ofp_to_u16(a->port) < ofp_to_u16(OFPP_MAX)) {
+        ds_put_format(fp->s, "%sint_transmit:%s", colors.special, colors.end);
+    }
+    ofputil_format_port(a->port, fp->port_map, fp->s);
+}
+
+static enum ofperr
+check_INT_TRANSMIT(const struct ofpact_int_transmit *a,
+             const struct ofpact_check_params *cp)
+{
+    return ofpact_check_output_port(a->port, cp->max_ports);
+}
+
+              
 /* Group actions. */
 
 static enum ofperr
@@ -7956,6 +8031,7 @@ action_set_classify(const struct ofpact *a)
     case OFPACT_DEBUG_SLOW:
     case OFPACT_CHECK_PKT_LARGER:
     case OFPACT_DELETE_FIELD:
+    case OFPACT_INT_TRANSMIT:
         return ACTION_SLOT_INVALID;
 
     default:
@@ -8160,6 +8236,7 @@ ovs_instruction_type_from_ofpact_type(enum ofpact_type type,
     case OFPACT_DEC_NSH_TTL:
     case OFPACT_CHECK_PKT_LARGER:
     case OFPACT_DELETE_FIELD:
+    case OFPACT_INT_TRANSMIT:
     default:
         return OVSINST_OFPIT11_APPLY_ACTIONS;
     }
@@ -8883,6 +8960,7 @@ get_ofpact_map(enum ofp_version version)
         { OFPACT_SET_L4_SRC_PORT, 9 },
         { OFPACT_SET_L4_DST_PORT, 10 },
         { OFPACT_ENQUEUE, 11 },
+        { OFPACT_INT_TRANSMIT, 99},
         { 0, -1 },
     };
 
@@ -9011,6 +9089,8 @@ ofpact_outputs_to_port(const struct ofpact *ofpact, ofp_port_t port)
     switch (ofpact->type) {
     case OFPACT_OUTPUT:
         return ofpact_get_OUTPUT(ofpact)->port == port;
+    case OFPACT_INT_TRANSMIT:
+        return ofpact_get_INT_TRANSMIT(ofpact)->port == port;
     case OFPACT_ENQUEUE:
         return ofpact_get_ENQUEUE(ofpact)->port == port;
     case OFPACT_CONTROLLER:

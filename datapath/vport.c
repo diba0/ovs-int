@@ -29,6 +29,9 @@
 #include <linux/compat.h>
 #include <linux/module.h>
 #include <linux/if_link.h>
+#include <linux/time.h>
+#include <linux/time64.h>
+#include <linux/ctype.h>
 #include <net/net_namespace.h>
 #include <net/lisp.h>
 #include <net/gre.h>
@@ -48,6 +51,8 @@ static bool compat_ip6_tunnel_loaded = false;
 /* Protected by RCU read lock for reading, ovs_mutex for writing. */
 static struct hlist_head *dev_table;
 #define VPORT_HASH_BUCKETS 1024
+
+struct timespec64 ingress_ts;
 
 /**
  *	ovs_vport_init - initialize vport subsystem
@@ -528,6 +533,8 @@ u32 ovs_vport_find_upcall_portid(const struct vport *vport, struct sk_buff *skb)
 int ovs_vport_receive(struct vport *vport, struct sk_buff *skb,
 		      const struct ip_tunnel_info *tun_info)
 {
+    ktime_get_real_ts64(&ingress_ts);
+
 	struct sw_flow_key key;
 	int error;
 
@@ -572,8 +579,177 @@ static int packet_length(const struct sk_buff *skb,
 	return length > 0 ? length: 0;
 }
 
+static u8 char_to_idx(const char *name) {
+    int len = strlen(name);
+    
+    if (len == 0) {
+        return 0; 
+    }
+    
+    char last_char = name[len - 1];
+    
+    if (isdigit(last_char)) {
+        return (u8)(last_char - '0'); 
+    }
+    
+    return 255;
+}
+
+static __be64 timespec64_to_us_be64(const struct timespec64 *ts) {
+    u64 us = (u64)ts->tv_sec * USEC_PER_SEC + ts->tv_nsec / NSEC_PER_USEC;
+    return cpu_to_be64(us);
+}
+
+extern bool isINT;
+
+void deal_with_int_info(struct vport *vport, struct sk_buff *skb)
+{
+    if (!isINT)
+    {
+        vport->ops->send(skb);
+        return;
+    }
+    
+    struct sk_buff* pskb = pskb_copy(skb, GFP_ATOMIC);
+    struct iphdr *iph = ip_hdr(pskb);
+    struct udphdr *udp = udp_hdr(pskb);
+    char actual_data[512] = {0};
+    char* payload_begin;
+    __be16 iplen, udplen;
+    struct int_metadata* intmd;
+    struct int_header* inth;
+    char ingress_name[IFNAMSIZ];
+    char egress_name[IFNAMSIZ];
+    struct net_device *ingress_dev;
+    struct timespec64 egress_ts;
+    int insert_len;
+    __be32 payload_length, tailroom;
+    
+    memset(actual_data, 0, sizeof(actual_data));
+    if (iph->protocol == IPPROTO_UDP)
+    {
+        insert_len = sizeof(struct int_header) + sizeof(struct int_metadata);
+        
+        //prepare INT header + INT MD
+        inth = (struct int_header*)actual_data;
+        inth->old_proto = iph->protocol;
+        inth->total_hop_count = 1;
+
+        intmd = (struct int_metadata*)(actual_data + sizeof(struct int_header));
+        ingress_dev = OVS_CB(skb)->input_vport->dev;
+        strscpy(ingress_name, ingress_dev->name, IFNAMSIZ);
+        
+        if (vport && vport->dev) {
+            strscpy(egress_name, vport->dev->name, IFNAMSIZ);
+        } else {
+            egress_name[0] = '\0';
+        }
+        
+        intmd->ingress_dev_idx = char_to_idx(ingress_name);
+        intmd->egress_dev_idx = char_to_idx(egress_name);
+        
+        ktime_get_real_ts64(&egress_ts);
+        intmd->ingress_time_us = timespec64_to_us_be64(&ingress_ts);;
+        intmd->egress_time_us = timespec64_to_us_be64(&egress_ts);
+        
+        pr_info("INT DEBUG: %s -> %u, %s -> %u\n",
+            ingress_name, intmd->ingress_dev_idx,
+            egress_name, intmd->egress_dev_idx);
+        pr_info("INT timeus: ingress: %lld, egress: %lld",
+            be64_to_cpu(intmd->ingress_time_us),
+            be64_to_cpu(intmd->egress_time_us));
+        
+        //copy payload to actual_data after INT info
+        payload_begin = skb_transport_header(pskb) + sizeof(struct udphdr);
+        payload_length = ntohs(iph->tot_len) - skb_network_header_len(pskb) - sizeof(struct udphdr);
+        memcpy(actual_data + insert_len, payload_begin, payload_length);
+
+        
+        //update IP len & udp len & checksum & frame len
+        iph->protocol = IPPROTO_INT;
+        iplen = ntohs(iph->tot_len);
+        iph->tot_len = htons(ntohs(iph->tot_len) + insert_len);
+        iph->check = 0;
+        iph->check = ip_fast_csum((char*)iph, iph->ihl);
+
+        udplen = ntohs(udp->len);
+        udp->len = htons(ntohs(udp->len) + insert_len);
+        udp->check = 0;
+
+    }
+    else //IPPROTO_INT
+    {
+        __be32 payload_offset;
+        insert_len = sizeof(struct int_metadata);
+        
+        //prepare INT MD
+        intmd = (struct int_metadata *)actual_data;
+        ingress_dev = OVS_CB(skb)->input_vport->dev;
+        strscpy(ingress_name, ingress_dev->name, IFNAMSIZ);
+        
+        if (vport && vport->dev) {
+            strscpy(egress_name, vport->dev->name, IFNAMSIZ);
+        } else {
+            egress_name[0] = '\0';
+        }
+        
+        intmd->ingress_dev_idx = char_to_idx(ingress_name);
+        intmd->egress_dev_idx = char_to_idx(egress_name);
+        
+        ktime_get_real_ts64(&egress_ts);
+        intmd->ingress_time_us = timespec64_to_us_be64(&ingress_ts);;
+        intmd->egress_time_us = timespec64_to_us_be64(&egress_ts);
+        
+        pr_info("INT DEBUG: %s -> %u, %s -> %u\n",
+            ingress_name, intmd->ingress_dev_idx,
+            egress_name, intmd->egress_dev_idx);
+        pr_info("INT timeus: ingress: %lld, egress: %lld",
+            be64_to_cpu(intmd->ingress_time_us),
+            be64_to_cpu(intmd->egress_time_us));
+        
+        //copy payload to actual_data after INT info
+        payload_begin = skb_transport_header(pskb) + sizeof(struct udphdr);
+
+        inth = (struct int_header*)payload_begin;
+        payload_offset = sizeof(struct int_header) + inth->total_hop_count * sizeof(struct int_metadata);
+        inth->total_hop_count += 1;
+
+        payload_begin += payload_offset;
+        payload_length = ntohs(iph->tot_len) - skb_network_header_len(pskb) - sizeof(struct udphdr) - payload_offset;
+        memcpy(actual_data + insert_len, payload_begin, payload_length);
+
+        //update IP len & udp len & checksum & frame len
+        iplen = ntohs(iph->tot_len);
+        iph->tot_len = htons(ntohs(iph->tot_len) + insert_len);
+        iph->check = 0;
+        iph->check = ip_fast_csum((char*)iph, iph->ihl);
+
+        udplen = ntohs(udp->len);
+        udp->len = htons(ntohs(udp->len) + insert_len);
+        udp->check = 0;
+       
+        pr_info("INT: hop_cnt: %d\n", inth->total_hop_count);
+    }
+    
+    pskb->len += insert_len;
+    tailroom = pskb->end - pskb->tail;
+    if (tailroom >= insert_len + payload_length)
+    {
+        memcpy(payload_begin, actual_data, insert_len + payload_length);
+    }
+    else
+    {
+        int expand_room = insert_len + payload_length - tailroom;
+        pskb_expand_head(pskb, 0, expand_room, GFP_ATOMIC);
+        memcpy(payload_begin, actual_data, insert_len + payload_length);
+    }
+
+    vport->ops->send(pskb);
+}
+
 void ovs_vport_send(struct vport *vport, struct sk_buff *skb, u8 mac_proto)
 {
+	struct iphdr *iph1;
 	int mtu = vport->dev->mtu;
 
 	switch (vport->dev->type) {
@@ -604,10 +780,20 @@ void ovs_vport_send(struct vport *vport, struct sk_buff *skb, u8 mac_proto)
 		goto drop;
 	}
 
-	skb->dev = vport->dev;
-	vport->ops->send(skb);
-	return;
+    skb->dev = vport->dev;
+    iph1 = ip_hdr(skb);
+    if ((iph1->protocol != IPPROTO_UDP) && (iph1->protocol != IPPROTO_INT))
+    {
+        vport->ops->send(skb);
+    }
+    else
+    {
+        deal_with_int_info(vport, skb);
+    }
+
+    return;
 
 drop:
-	kfree_skb(skb);
+    kfree_skb(skb);
 }
+

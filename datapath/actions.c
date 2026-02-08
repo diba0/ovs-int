@@ -44,6 +44,8 @@
 #include "vport.h"
 #include "flow_netlink.h"
 
+bool isINT = false;
+
 static int do_execute_actions(struct datapath *dp, struct sk_buff *skb,
 			      struct sw_flow_key *key,
 			      const struct nlattr *attr, int len);
@@ -1272,7 +1274,31 @@ static int do_execute_actions(struct datapath *dp, struct sk_buff *skb,
 		case OVS_ACTION_ATTR_OUTPUT: {
 			int port = nla_get_u32(a);
 			struct sk_buff *clone;
+            isINT = false;
+            
+			/* Every output action needs a separate clone
+			 * of 'skb', In case the output action is the
+			 * last action, cloning can be avoided.
+			 */
+			if (nla_is_last(a, rem)) {
+				do_output(dp, skb, port, key);
+				/* 'skb' has been used for output.
+				 */
+				return 0;
+			}
 
+			clone = skb_clone(skb, GFP_ATOMIC);
+			if (clone)
+				do_output(dp, clone, port, key);
+			OVS_CB(skb)->cutlen = 0;
+			break;
+		}
+        
+		case OVS_ACTION_ATTR_INT_TRANSMIT: {
+			int port = nla_get_u32(a);
+			struct sk_buff *clone;
+            isINT = true;
+            
 			/* Every output action needs a separate clone
 			 * of 'skb', In case the output action is the
 			 * last action, cloning can be avoided.

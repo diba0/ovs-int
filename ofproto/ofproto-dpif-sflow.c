@@ -1129,6 +1129,7 @@ dpif_sflow_read_actions(const struct flow *flow,
         enum ovs_action_attr type = nl_attr_type(a);
         switch (type) {
         case OVS_ACTION_ATTR_OUTPUT:
+        case OVS_ACTION_ATTR_INT_TRANSMIT:
             /* Capture the output port in case we need it
              * to get the output tunnel type.
              */

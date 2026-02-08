@@ -601,7 +601,7 @@ static int key_extract_l3l4(struct sk_buff *skb, struct sw_flow_key *key)
 				memset(&key->tp, 0, sizeof(key->tp));
 			}
 
-		} else if (key->ip.proto == IPPROTO_UDP) {
+		} else if ((key->ip.proto == IPPROTO_UDP) || (key->ip.proto == IPPROTO_INT)) {
 			if (udphdr_ok(skb)) {
 				struct udphdr *udp = udp_hdr(skb);
 				key->tp.src = udp->source;

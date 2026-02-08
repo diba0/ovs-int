@@ -202,4 +202,18 @@ int __ovs_vport_ops_register(struct vport_ops *ops);
 void ovs_vport_ops_unregister(struct vport_ops *ops);
 void ovs_vport_send(struct vport *vport, struct sk_buff *skb, u8 mac_proto);
 
+struct int_header
+{
+    u8 old_proto;
+    u8 total_hop_count;
+};
+
+struct int_metadata
+{
+    u8 ingress_dev_idx;
+    u8 egress_dev_idx;
+    __be64 ingress_time_us;
+    __be64 egress_time_us;
+}__packed;
+
 #endif /* vport.h */

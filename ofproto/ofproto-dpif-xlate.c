@@ -422,6 +422,8 @@ struct xvlan {
     struct xvlan_single v[FLOW_MAX_VLAN_HEADERS];
 };
 
+bool bIsINT = false;
+
 const char *xlate_strerror(enum xlate_error error)
 {
     switch (error) {
@@ -4256,9 +4258,18 @@ compose_output_action__(struct xlate_ctx *ctx, ofp_port_t ofp_port,
                 }
             }
 
-            nl_msg_put_odp_port(ctx->odp_actions,
-                                OVS_ACTION_ATTR_OUTPUT,
-                                out_port);
+            if (bIsINT)
+            {
+                nl_msg_put_odp_port(ctx->odp_actions,
+                                    OVS_ACTION_ATTR_INT_TRANSMIT,
+                                    out_port);
+            }
+            else
+            {
+                nl_msg_put_odp_port(ctx->odp_actions,
+                                    OVS_ACTION_ATTR_OUTPUT,
+                                    out_port);
+            }
         }
 
         ctx->sflow_odp_port = odp_port;
@@ -5667,6 +5678,7 @@ reversible_actions(const struct ofpact *ofpacts, size_t ofpacts_len)
         case OFPACT_MULTIPATH:
         case OFPACT_NOTE:
         case OFPACT_OUTPUT:
+        case OFPACT_INT_TRANSMIT:
         case OFPACT_OUTPUT_REG:
         case OFPACT_POP_MPLS:
         case OFPACT_POP_QUEUE:
@@ -5945,6 +5957,7 @@ freeze_unroll_actions(const struct ofpact *a, const struct ofpact *end,
         case OFPACT_OUTPUT_TRUNC:
         case OFPACT_GROUP:
         case OFPACT_OUTPUT:
+        case OFPACT_INT_TRANSMIT:
         case OFPACT_CONTROLLER:
         case OFPACT_DEC_MPLS_TTL:
         case OFPACT_DEC_NSH_TTL:
@@ -6601,6 +6614,7 @@ recirc_for_mpls(const struct ofpact *a, struct xlate_ctx *ctx)
 
     /* Output actions  do not require recirculation. */
     case OFPACT_OUTPUT:
+    case OFPACT_INT_TRANSMIT:
     case OFPACT_OUTPUT_TRUNC:
     case OFPACT_ENQUEUE:
     case OFPACT_OUTPUT_REG:
@@ -6757,11 +6771,19 @@ do_xlate_actions(const struct ofpact *ofpacts, size_t ofpacts_len,
 
         switch (a->type) {
         case OFPACT_OUTPUT:
+            bIsINT = false;
             xlate_output_action(ctx, ofpact_get_OUTPUT(a)->port,
                                 ofpact_get_OUTPUT(a)->max_len, true, last,
                                 false, group_bucket_action);
             break;
-
+        case OFPACT_INT_TRANSMIT:
+        {
+            bIsINT = true;
+            xlate_output_action(ctx, ofpact_get_INT_TRANSMIT(a)->port,
+                                UINT16_MAX, true, last,
+                                false, group_bucket_action);
+            break;
+        }
         case OFPACT_GROUP:
             if (xlate_group_action(ctx, ofpact_get_GROUP(a)->group_id, last)) {
                 /* Group could not be found. */
