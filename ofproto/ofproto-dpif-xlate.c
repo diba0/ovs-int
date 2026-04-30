@@ -44,6 +44,7 @@
 #include "netlink.h"
 #include "nx-match.h"
 #include "odp-execute.h"
+#include "ofproto/ofproto-dpif-int.h"
 #include "ofproto/ofproto-dpif-ipfix.h"
 #include "ofproto/ofproto-dpif-lsample.h"
 #include "ofproto/ofproto-dpif-mirror.h"
@@ -118,6 +119,7 @@ struct xbridge {
     struct dpif_sflow *sflow;     /* SFlow handle, or null. */
     struct dpif_ipfix *ipfix;     /* Ipfix handle, or null. */
     struct dpif_lsample *lsample; /* Local sample handle, or null. */
+    struct dpif_int_sink *int_sink; /* INT sink handle, or null. */
     struct netflow *netflow;      /* Netflow handle, or null. */
     struct stp *stp;              /* STP or null if disabled. */
     struct rstp *rstp;            /* RSTP or null if disabled. */
@@ -702,6 +704,7 @@ static void xlate_xbridge_set(struct xbridge *, struct dpif *,
                               const struct dpif_sflow *,
                               const struct dpif_ipfix *,
                               const struct dpif_lsample *,
+                              const struct dpif_int_sink *,
                               const struct netflow *,
                               bool forward_bpdu, bool has_in_band,
                               const struct dpif_backer_support *,
@@ -1086,6 +1089,7 @@ xlate_xbridge_set(struct xbridge *xbridge,
                   const struct dpif_sflow *sflow,
                   const struct dpif_ipfix *ipfix,
                   const struct dpif_lsample *lsample,
+                  const struct dpif_int_sink *int_sink,
                   const struct netflow *netflow,
                   bool forward_bpdu, bool has_in_band,
                   const struct dpif_backer_support *support,
@@ -1119,6 +1123,11 @@ xlate_xbridge_set(struct xbridge *xbridge,
     if (xbridge->lsample != lsample) {
         dpif_lsample_unref(xbridge->lsample);
         xbridge->lsample = dpif_lsample_ref(lsample);
+    }
+
+    if (xbridge->int_sink != int_sink) {
+        dpif_int_sink_unref(xbridge->int_sink);
+        xbridge->int_sink = dpif_int_sink_ref(int_sink);
     }
 
     if (xbridge->stp != stp) {
@@ -1236,7 +1245,8 @@ xlate_xbridge_copy(struct xbridge *xbridge)
                       xbridge->dpif, xbridge->ml, xbridge->stp,
                       xbridge->rstp, xbridge->ms, xbridge->mbridge,
                       xbridge->sflow, xbridge->ipfix, xbridge->lsample,
-                      xbridge->netflow, xbridge->forward_bpdu,
+                      xbridge->int_sink, xbridge->netflow,
+                      xbridge->forward_bpdu,
                       xbridge->has_in_band, &xbridge->support,
                       xbridge->addr);
     LIST_FOR_EACH (xbundle, list_node, &xbridge->xbundles) {
@@ -1396,6 +1406,7 @@ xlate_ofproto_set(struct ofproto_dpif *ofproto, const char *name,
                   const struct dpif_sflow *sflow,
                   const struct dpif_ipfix *ipfix,
                   const struct dpif_lsample *lsample,
+                  const struct dpif_int_sink *int_sink,
                   const struct netflow *netflow,
                   bool forward_bpdu, bool has_in_band,
                   const struct dpif_backer_support *support)
@@ -1420,8 +1431,8 @@ xlate_ofproto_set(struct ofproto_dpif *ofproto, const char *name,
     old_addr = xbridge->addr;
 
     xlate_xbridge_set(xbridge, dpif, ml, stp, rstp, ms, mbridge, sflow, ipfix,
-                      lsample, netflow, forward_bpdu, has_in_band, support,
-                      xbridge_addr);
+                      lsample, int_sink, netflow, forward_bpdu, has_in_band,
+                      support, xbridge_addr);
 
     if (xbridge_addr != old_addr) {
         xbridge_addr_unref(xbridge_addr);
@@ -1453,6 +1464,7 @@ xlate_xbridge_remove(struct xlate_cfg *xcfg, struct xbridge *xbridge)
     dpif_sflow_unref(xbridge->sflow);
     dpif_ipfix_unref(xbridge->ipfix);
     dpif_lsample_unref(xbridge->lsample);
+    dpif_int_sink_unref(xbridge->int_sink);
     netflow_unref(xbridge->netflow);
     stp_unref(xbridge->stp);
     rstp_unref(xbridge->rstp);
@@ -4614,6 +4626,16 @@ compose_output_action__(struct xlate_ctx *ctx, ofp_port_t ofp_port,
             /* Tunnel push-pop action is not compatible with
              * IPFIX action. */
             compose_ipfix_action(ctx, out_port);
+
+            /* INT sink: if enabled, process any INT headers in this packet
+             * before forwarding.  The packet is modified in-place (INT data
+             * stripped) and a telemetry report is sent to the collector. */
+            if (ctx->xbridge->int_sink && ctx->xin->packet) {
+                dpif_int_sink_process_packet(
+                    ctx->xbridge->int_sink,
+                    CONST_CAST(struct dp_packet *, ctx->xin->packet),
+                    &ctx->xin->flow);
+            }
 
             /* Handle truncation of the mirrored packet. */
             if (ctx->mirror_snaplen > 0 &&

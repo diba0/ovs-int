@@ -1723,4 +1723,61 @@ BUILD_ASSERT_DECL(DNS_HEADER_LEN == sizeof(struct dns_header));
 #define DNS_CLASS_IN            0x01
 #define DNS_DEFAULT_RR_TTL      3600
 
+/* -----------------------------------------------------------------------
+ * In-band Network Telemetry (INT) – Telemetry Report and header structures
+ * as specified in INT Telemetry Report (v1.0) and INT-MD v2.1.
+ * ----------------------------------------------------------------------- */
+
+/* UDP destination port used by INT-over-UDP (INT Spec). */
+#define INT_DST_PORT 8090
+
+/* INT shim type value for INT over TCP/UDP. */
+#define INT_SHIM_TYPE 1
+
+/* INT shim header (4 bytes) inserted after the L4 header. */
+#define INT_SHIM_LEN 4
+struct int_shim_hdr {
+    uint8_t  type;          /* INT type (1 = INT-MD). */
+    uint8_t  rsvd;          /* Reserved. */
+    uint8_t  length;        /* Total INT data length in 4-byte words,
+                             * including this shim. */
+    uint8_t  dscp;          /* Original DSCP value before INT insertion. */
+};
+BUILD_ASSERT_DECL(INT_SHIM_LEN == sizeof(struct int_shim_hdr));
+
+/* INT Metadata Header (12 bytes) immediately follows the shim. */
+#define INT_MD_HDR_LEN 12
+struct int_md_hdr {
+    ovs_be16 ver_rep_c_e;   /* ver(4) | rep(2) | c(1) | e(1) | rsvd(8). */
+    uint8_t  hop_metadata_len; /* Length of per-hop metadata in 4-byte words. */
+    uint8_t  remaining_hop_cnt; /* Remaining hop count. */
+    ovs_be16 instruction_bitmap; /* Bitmap of requested metadata instructions. */
+    ovs_be16 domain_specific_id; /* Domain-specific ID. */
+};
+BUILD_ASSERT_DECL(INT_MD_HDR_LEN == sizeof(struct int_md_hdr));
+
+/* INT Telemetry Report Fixed Header (16 bytes). */
+#define INT_REPORT_HDR_LEN 16
+struct int_report_hdr {
+    uint8_t  ver;           /* Report version (1). */
+    uint8_t  len;           /* Header length in 4-byte words. */
+    uint16_t rsvd;          /* Reserved. */
+    ovs_be32 domain_id;     /* Telemetry domain ID. */
+    ovs_be32 seq_num;       /* Report sequence number. */
+    ovs_be32 hw_id;         /* Switch/ASIC hardware ID. */
+};
+BUILD_ASSERT_DECL(INT_REPORT_HDR_LEN == sizeof(struct int_report_hdr));
+
+/* INT Telemetry Report Individual Header (12 bytes). */
+#define INT_INDIVIDUAL_HDR_LEN 12
+struct int_individual_hdr {
+    uint8_t  report_type;   /* Bit flags: bit 0 = flow_changed, bit 1 = queue. */
+    uint8_t  rsvd;
+    ovs_be16 in_port;       /* Ingress port number. */
+    ovs_be16 eg_port;       /* Egress port number. */
+    ovs_be16 queue_id;      /* Queue ID. */
+    ovs_be32 queue_occupancy; /* Queue occupancy. */
+};
+BUILD_ASSERT_DECL(INT_INDIVIDUAL_HDR_LEN == sizeof(struct int_individual_hdr));
+
 #endif /* packets.h */

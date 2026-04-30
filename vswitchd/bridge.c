@@ -71,6 +71,7 @@
 #include "unixctl.h"
 #include "lib/vswitch-idl.h"
 #include "vlan-bitmap.h"
+#include "ofproto/ofproto-dpif-int.h"
 
 VLOG_DEFINE_THIS_MODULE(bridge);
 
@@ -289,6 +290,7 @@ static void bridge_configure_mcast_snooping(struct bridge *);
 static void bridge_configure_sflow(struct bridge *, int *sflow_bridge_number);
 static void bridge_configure_ipfix(struct bridge *);
 static void bridge_configure_lsample(struct bridge *);
+static void bridge_configure_int_sink(struct bridge *);
 static void bridge_configure_spanning_tree(struct bridge *);
 static void bridge_configure_tables(struct bridge *);
 static void bridge_configure_dp_desc(struct bridge *);
@@ -995,6 +997,7 @@ bridge_reconfigure(const struct ovsrec_open_vswitch *ovs_cfg)
         bridge_configure_sflow(br, &sflow_bridge_number);
         bridge_configure_ipfix(br);
         bridge_configure_lsample(br);
+        bridge_configure_int_sink(br);
         bridge_configure_spanning_tree(br);
         bridge_configure_tables(br);
         bridge_configure_dp_desc(br);
@@ -1737,6 +1740,32 @@ bridge_configure_lsample(struct bridge *br)
     if (n_opts > 0) {
         free(opts_array);
     }
+}
+
+/* Configure the INT sink on 'br' using other_config keys:
+ *   int-sink-collector-ip    – IPv4 address of the telemetry collector
+ *   int-sink-collector-port  – UDP port of the telemetry collector (default 0)
+ *   int-sink-switch-id       – 32-bit switch identifier (default 0)
+ *
+ * INT sink processing is disabled when 'int-sink-collector-ip' is absent or
+ * empty. */
+static void
+bridge_configure_int_sink(struct bridge *br)
+{
+    const struct smap *cfg = &br->cfg->other_config;
+    const char *collector_ip = smap_get(cfg, "int-sink-collector-ip");
+
+    if (!collector_ip || !collector_ip[0]) {
+        ofproto_set_int_sink(br->ofproto, NULL);
+        return;
+    }
+
+    struct dpif_int_sink_options opts;
+    opts.collector_ip   = CONST_CAST(char *, collector_ip);
+    opts.collector_port = smap_get_uint(cfg, "int-sink-collector-port", 0);
+    opts.switch_id      = smap_get_uint(cfg, "int-sink-switch-id", 0);
+
+    ofproto_set_int_sink(br->ofproto, &opts);
 }
 
 static void

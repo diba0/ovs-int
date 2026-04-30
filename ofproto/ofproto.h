@@ -52,6 +52,7 @@ struct ovs_list;
 struct lldp_status;
 struct aa_settings;
 struct aa_mapping_settings;
+struct dpif_int_sink_options;
 
 /* Needed for the lock annotations. */
 extern struct ovs_mutex ofproto_mutex;
@@ -380,6 +381,8 @@ int ofproto_set_ipfix(struct ofproto *,
 int ofproto_set_local_sample(struct ofproto *ofproto,
                              const struct ofproto_lsample_options *,
                              size_t n_options);
+void ofproto_set_int_sink(struct ofproto *,
+                          const struct dpif_int_sink_options *);
 void ofproto_set_flow_restore_wait(bool flow_restore_wait_db);
 bool ofproto_get_flow_restore_wait(void);
 int ofproto_set_stp(struct ofproto *, const struct ofproto_stp_settings *);

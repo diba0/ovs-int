@@ -33,6 +33,7 @@ struct bond;
 struct dpif;
 struct lacp;
 struct dpif_ipfix;
+struct dpif_int_sink;
 struct dpif_sflow;
 struct mac_learning;
 struct mcast_snooping;
@@ -181,6 +182,7 @@ void xlate_ofproto_set(struct ofproto_dpif *, const char *name, struct dpif *,
                        struct rstp *, const struct mcast_snooping *,
                        const struct mbridge *, const struct dpif_sflow *,
                        const struct dpif_ipfix *, const struct dpif_lsample *,
+                       const struct dpif_int_sink *,
                        const struct netflow *, bool forward_bpdu,
                        bool has_in_band,
                        const struct dpif_backer_support *support);

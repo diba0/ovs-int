@@ -45,6 +45,7 @@
 #include "ofproto/ofproto-dpif.h"
 #include "ofproto/ofproto-provider.h"
 #include "ofproto-dpif-ipfix.h"
+#include "ofproto-dpif-int.h"
 #include "ofproto-dpif-mirror.h"
 #include "ofproto-dpif-monitor.h"
 #include "ofproto-dpif-rid.h"
@@ -487,7 +488,8 @@ type_run(const char *type)
                               ofproto->backer->dpif, ofproto->ml,
                               ofproto->stp, ofproto->rstp, ofproto->ms,
                               ofproto->mbridge, ofproto->sflow, ofproto->ipfix,
-                              ofproto->lsample, ofproto->netflow,
+                              ofproto->lsample, ofproto->int_sink,
+                              ofproto->netflow,
                               ofproto->up.forward_bpdu,
                               connmgr_has_in_band(ofproto->up.connmgr),
                               &ofproto->backer->rt_support);
@@ -1804,6 +1806,7 @@ construct(struct ofproto *ofproto_)
     ofproto->netflow = NULL;
     ofproto->sflow = NULL;
     ofproto->ipfix = NULL;
+    ofproto->int_sink = NULL;
     ofproto->stp = NULL;
     ofproto->rstp = NULL;
     ofproto->dump_seq = 0;
@@ -1966,6 +1969,7 @@ destruct(struct ofproto *ofproto_, bool del)
     netflow_unref(ofproto->netflow);
     dpif_sflow_unref(ofproto->sflow);
     dpif_ipfix_unref(ofproto->ipfix);
+    dpif_int_sink_unref(ofproto->int_sink);
     dpif_lsample_unref(ofproto->lsample);
     hmap_destroy(&ofproto->bundles);
     mac_learning_unref(ofproto->ml);
@@ -2028,6 +2032,9 @@ run(struct ofproto *ofproto_)
     }
     if (ofproto->ipfix) {
         dpif_ipfix_run(ofproto->ipfix);
+    }
+    if (ofproto->int_sink) {
+        dpif_int_sink_run(ofproto->int_sink);
     }
 
     new_seq = seq_read(connectivity_seq_get());
@@ -2121,6 +2128,9 @@ ofproto_dpif_wait(struct ofproto *ofproto_)
     }
     if (ofproto->ipfix) {
         dpif_ipfix_wait(ofproto->ipfix);
+    }
+    if (ofproto->int_sink) {
+        dpif_int_sink_wait(ofproto->int_sink);
     }
     if (ofproto->lacp_enabled || ofproto->has_bonded_bundles) {
         struct ofbundle *bundle;
@@ -2529,6 +2539,27 @@ get_ipfix_stats(const struct ofproto *ofproto_,
     }
 
     return dpif_ipfix_get_stats(di, bridge_ipfix, replies);
+}
+
+/* Configure the INT sink on 'ofproto'.  Passing NULL as 'options' (or an
+ * options struct with a NULL collector_ip) disables the INT sink. */
+static void
+set_int_sink(struct ofproto_dpif *ofproto,
+             const struct dpif_int_sink_options *options)
+{
+    if (options && options->collector_ip) {
+        if (!ofproto->int_sink) {
+            ofproto->int_sink = dpif_int_sink_create();
+        }
+        dpif_int_sink_set_options(ofproto->int_sink, options);
+        ofproto->backer->need_revalidate = REV_RECONFIGURE;
+    } else {
+        if (ofproto->int_sink) {
+            dpif_int_sink_unref(ofproto->int_sink);
+            ofproto->int_sink = NULL;
+            ofproto->backer->need_revalidate = REV_RECONFIGURE;
+        }
+    }
 }
 
 static int

@@ -62,6 +62,7 @@ struct ofproto_dpif;
 struct uuid;
 struct xlate_cache;
 struct xlate_ctx;
+struct dpif_int_sink;
 
 /* Number of implemented OpenFlow tables. */
 enum { N_TABLES = 255 };
@@ -332,6 +333,7 @@ struct ofproto_dpif {
     struct dpif_sflow *sflow;
     struct dpif_ipfix *ipfix;
     struct dpif_lsample *lsample;
+    struct dpif_int_sink *int_sink;
     struct hmap bundles;        /* Contains "struct ofbundle"s. */
     struct mac_learning *ml;
     struct mcast_snooping *ms;
